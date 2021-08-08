@@ -58,7 +58,7 @@
 #define MAX_RCON_RESPONSE_WAIT 3
 #define MAX_RCON_RESPONSE_PAYLOAD 4096
 #define MAX_RCON_RESPONSE (MAX_RCON_RESPONSE_PAYLOAD + RCON_HEADER_SIZE)
-#define CLIENT_BUFFER_SIZE 4096
+#define CLIENT_BUFFER_SIZE 65536
 #define SOCKET_BUFFER_SIZE 8192
 
 #define MAX_SERVER_WAIT_INTERVAL (5 * 60)
@@ -706,8 +706,8 @@ int di_run(daemon_inst_p di)
 	struct timeval timeout;
 	size_t i;
 	int retval;
-	char recv_buf[SOCKET_BUFFER_SIZE];
-	char response_buf[SOCKET_BUFFER_SIZE * 2];
+	char recv_buf[CLIENT_BUFFER_SIZE];
+	char response_buf[CLIENT_BUFFER_SIZE];
 	rcon_packet_p packrecv = (rcon_packet_p)response_buf;
 	size_t cb_to_recv = 0;
 	size_t cb_recv = 0;
@@ -747,7 +747,6 @@ int di_run(daemon_inst_p di)
 			int maxfd = 0;
 			int rcon_ready_to_send = 0;
 			FD_ZERO(&readfds);
-			FD_ZERO(&writefds);
 			timeout.tv_sec = 1;
 			timeout.tv_usec = 0;
 
@@ -758,14 +757,12 @@ int di_run(daemon_inst_p di)
 				if(sock != -1)
 				{
 					FD_SET(sock, &readfds);
-					FD_SET(sock, &writefds);
 					maxfd ++;
 				}
 			}
 
 			// Add the RCON server to the list
 			FD_SET(di->socket_to_rcon, &readfds);
-			FD_SET(di->socket_to_rcon, &writefds);
 			maxfd ++;
 
 			// Add the listener server to the list
@@ -776,7 +773,7 @@ int di_run(daemon_inst_p di)
 			}
 
 			// First, wait for any activity of the sockets.
-			retval = select(FD_SETSIZE, &readfds, &writefds, NULL, &timeout);
+			retval = select(FD_SETSIZE, &readfds, NULL, NULL, &timeout);
 			if(retval == -1)
 			{
 				di_printf(di, "[FAIL] select() failed: %s.\n", strerror(errno));
@@ -874,11 +871,6 @@ int di_run(daemon_inst_p di)
 					cb_to_recv = 0;
 				}
 			}
-			
-			if (FD_ISSET(di->socket_to_rcon, &writefds))
-			{
-				rcon_ready_to_send = 1;
-			}
 
 			for(i = 0; i < di->client_count; i++)
 			{
@@ -945,6 +937,18 @@ int di_run(daemon_inst_p di)
 				{
 					if (!c->buffer_sent)
 					{
+						FD_ZERO(&writefds);
+						FD_SET(di->socket_to_rcon, &writefds);
+						retval = select(FD_SETSIZE, NULL, &writefds, NULL, NULL);
+						if(retval == -1)
+						{
+							di_printf(di, "[FAIL] select() failed: %s.\n", strerror(errno));
+							return 0;
+						}
+						if (FD_ISSET(di->socket_to_rcon, &writefds))
+						{
+							rcon_ready_to_send = 1;
+						}
 						if (rcon_ready_to_send)
 						{
 							size_t send_len;
@@ -971,6 +975,14 @@ int di_run(daemon_inst_p di)
 					{
 						if (!c->response_sent)
 						{
+							FD_ZERO(&writefds);
+							FD_SET(sock, &writefds);
+							retval = select(FD_SETSIZE, NULL, &writefds, NULL, NULL);
+							if(retval == -1)
+							{
+								di_printf(di, "[FAIL] select() failed: %s.\n", strerror(errno));
+								return 0;
+							}
 							if (FD_ISSET(sock, &writefds))
 							{
 								// Send the response back to the client
